@@ -1260,7 +1260,7 @@ function sendChat(){
   setTimeout(()=>{
     chat.messages.push({
       who:'ai',
-      text:'وەرگرت. بۆ وەڵامی زیرەکی ڕاستەقینە، پێویستی بە بەستنەوەی مۆدێلی AI لە backend هەیە. بۆ ئێستا ئەمە نموونەیەکە — دەتوانیت ئامرازەکان لە دوگمەی ± بەکاربهێنیت.',
+      text:'نامەکەت وەرگیرا. بۆ وەڵامی زیرەکی ڕاستەقینە، پێویستە مۆدێلی AI لە بەشی Backend ببەسترێتەوە. لە ئێستادا دەتوانیت ئامرازەکانی تر لە دوگمەی ± بەکاربهێنیت.',
       time: new Date().toLocaleTimeString('en-GB').slice(0,5)
     });
     store.set('chats', chats);
@@ -1503,8 +1503,6 @@ addEventListener('resize', () => {
     setTimeout(()=>setupCanvas('planSig'), 100);
   }
 });
-
-/* ============ INIT ============ */
 </script>
 </body>
 </html>
