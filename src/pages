@@ -1,330 +1,331 @@
 import React, { useEffect, useMemo, useState } from "react";
 
-interface ProductItem {
-  id: string;
-  name: string;
-  price: number;
-  qty: number;
-  updatedAt: number;
+interface MobileProductItem {
+	id: string;
+	name: string;
+	price: number;
+	qty: number;
+	updatedAt: number;
 }
 
-const STORAGE_KEY = "hamaai_mobile_app_products_v1";
-const SESSION_KEY = "hamaai_mobile_app_channel_v1";
-const SYNC_ENDPOINT = ""; // ئەگەر Cloudflare Worker هەبێت لێرە دابنرێت، ئەگەر بەتاڵ بێت بە ناوخۆیی و هاوکاتی خۆکار کار دەکات
+const MOBILE_STORAGE_KEY = "hamaai_mobile_app_products_v1";
+const MOBILE_CHANNEL_KEY = "hamaai_mobile_app_channel_v1";
+// ئەگەر Worker لەسەر دۆمەینێکی ترە لینکی بنووسە، ئەگەر لەسەر هەمان وێبسایتە بە بەتاڵی بهێڵەرەوە
+const MOBILE_SYNC_ENDPOINT = "";
 
-function getOrCreateChannelId(): string {
-  const params = new URLSearchParams(window.location.search);
-  const fromUrl = params.get("channel");
-  if (fromUrl && fromUrl.trim().length > 0) {
-    localStorage.setItem(SESSION_KEY, fromUrl.trim());
-    return fromUrl.trim();
-  }
-  const saved = localStorage.getItem(SESSION_KEY);
-  if (saved) return saved;
-  const generated = `room_${Math.random().toString(36).slice(2, 10)}_${Date.now().toString(36)}`;
-  localStorage.setItem(SESSION_KEY, generated);
-  return generated;
+function resolveChannelId(): string {
+	const params = new URLSearchParams(window.location.search);
+	const fromUrl = params.get("channel");
+	if (fromUrl && fromUrl.trim().length > 0) {
+		try {
+			localStorage.setItem(MOBILE_CHANNEL_KEY, fromUrl.trim());
+		} catch {
+			// ignore storage error
+		}
+		return fromUrl.trim();
+	}
+	try {
+		const saved = localStorage.getItem(MOBILE_CHANNEL_KEY);
+		if (saved) return saved;
+		const generated = `ch_${Math.random().toString(36).slice(2, 10)}_${Date.now().toString(36)}`;
+		localStorage.setItem(MOBILE_CHANNEL_KEY, generated);
+		return generated;
+	} catch {
+		return "ch_default";
+	}
 }
 
-function loadSavedProducts(): ProductItem[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
+function loadMobileProducts(): MobileProductItem[] {
+	try {
+		const raw = localStorage.getItem(MOBILE_STORAGE_KEY);
+		if (!raw) return [];
+		const parsed = JSON.parse(raw);
+		return Array.isArray(parsed) ? parsed : [];
+	} catch {
+		return [];
+	}
 }
 
 export default function MobileApp() {
-  const [products, setProducts] = useState<ProductItem[]>(() => loadSavedProducts());
-  const [name, setName] = useState("");
-  const [price, setPrice] = useState("");
-  const [qty, setQty] = useState("1");
-  const [isOnline, setIsOnline] = useState<boolean>(() => navigator.onLine);
-  const [autoAccepted, setAutoAccepted] = useState<boolean>(false);
-  const [syncStatus, setSyncStatus] = useState<string>("ئامادەیە");
-  const [copied, setCopied] = useState<boolean>(false);
+	const [products, setProducts] = useState<MobileProductItem[]>(() =>
+		loadMobileProducts(),
+	);
+	const [name, setName] = useState("");
+	const [price, setPrice] = useState("");
+	const [qty, setQty] = useState("1");
+	const [isOnline, setIsOnline] = useState<boolean>(() => navigator.onLine);
+	const [statusText, setStatusText] = useState<string>(
+		"خۆکارانە قبوڵ کرا و ئامادەیە",
+	);
+	const [copied, setCopied] = useState(false);
 
-  const channelId = useMemo(() => getOrCreateChannelId(), []);
+	const channelId = useMemo(() => resolveChannelId(), []);
 
-  const mobileLink = useMemo(() => {
-    const baseUrl = `${window.location.origin}/mobile_app`;
-    return `${baseUrl}?channel=${encodeURIComponent(channelId)}&auto=1`;
-  }, [channelId]);
+	const mobileLink = useMemo(() => {
+		const base = `${window.location.origin}/mobile_app`;
+		return `${base}?channel=${encodeURIComponent(channelId)}&auto=1`;
+	}, [channelId]);
 
-  // پاراستنی بەردەوامی کاڵاکان لە localStorage (دەمێننەوە بۆ بەیانی و دوای داخستن)
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(products));
-    } catch {
-      setSyncStatus("کێشە لە خەزنکردنی ناوخۆیی");
-    }
-  }, [products]);
+	const syncUrlBase = useMemo(() => {
+		return MOBILE_SYNC_ENDPOINT.replace(/\/+$/, "");
+	}, []);
 
-  // قبوڵکردنی خۆکار کاتێک بە لینک لە مۆبایل دەکرێتەوە
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get("auto") === "1" || params.get("channel")) {
-      setAutoAccepted(true);
-      setSyncStatus("خۆکارانە قبوڵ کرا و پەیوەست بوو");
-    }
-  }, []);
+	useEffect(() => {
+		try {
+			localStorage.setItem(MOBILE_STORAGE_KEY, JSON.stringify(products));
+		} catch {
+			setStatusText("کێشە لە خەزنکردنی ناوخۆیی");
+		}
+	}, [products]);
 
-  // چاودێریکردنی دۆخی ئینتەرنێت (ئۆنڵاین / ئۆفڵاین)
-  useEffect(() => {
-    const handleOnline = () => {
-      setIsOnline(true);
-      setSyncStatus("ئۆنڵاین بوو — هاوکاتکردنی نهێنی چالاکە");
-    };
-    const handleOffline = () => {
-      setIsOnline(false);
-      setSyncStatus("ئینتەرنێت نییە (ئۆفڵاین) — لە هەمان شوێن ماوە");
-    };
+	useEffect(() => {
+		const handleOnline = () => {
+			setIsOnline(true);
+			setStatusText("ئۆنڵاین بوو — هاوکاتکردنی نهێنی چالاکە");
+		};
+		const handleOffline = () => {
+			setIsOnline(false);
+			setStatusText("ئینتەرنێت نییە (ئۆفڵاین) — لە هەمان شوێن ماوە");
+		};
+		window.addEventListener("online", handleOnline);
+		window.addEventListener("offline", handleOffline);
+		return () => {
+			window.removeEventListener("online", handleOnline);
+			window.removeEventListener("offline", handleOffline);
+		};
+	}, []);
 
-    window.addEventListener("online", handleOnline);
-    window.addEventListener("offline", handleOffline);
-    return () => {
-      window.removeEventListener("online", handleOnline);
-      window.removeEventListener("offline", handleOffline);
-    };
-  }, []);
+	useEffect(() => {
+		const onStorage = (e: StorageEvent) => {
+			if (e.key === MOBILE_STORAGE_KEY && e.newValue) {
+				try {
+					const incoming = JSON.parse(e.newValue) as MobileProductItem[];
+					if (Array.isArray(incoming)) {
+						setProducts(incoming);
+						setStatusText("داتاکان بە نهێنی هاوکات کران");
+					}
+				} catch {
+					// ignore invalid JSON
+				}
+			}
+		};
+		window.addEventListener("storage", onStorage);
+		return () => window.removeEventListener("storage", onStorage);
+	}, []);
 
-  // هاوکاتکردنی نهێنی لە نێوان تابەکان / ئامێرەکان کاتێک ئۆنڵاین بن
-  useEffect(() => {
-    const onStorageChange = (e: StorageEvent) => {
-      if (e.key === STORAGE_KEY && e.newValue) {
-        try {
-          const incoming: ProductItem[] = JSON.parse(e.newValue);
-          if (Array.isArray(incoming)) {
-            setProducts(incoming);
-            setSyncStatus("داتاکان بە نهێنی هاوکات کران");
-          }
-        } catch {
-          // ignore invalid payload
-        }
-      }
-    };
-    window.addEventListener("storage", onStorageChange);
-    return () => window.removeEventListener("storage", onStorageChange);
-  }, []);
+	useEffect(() => {
+		if (!isOnline) return;
+		let cancelled = false;
 
-  // هاوکاتکردنی دوور (کاتێک لە دەرەوەیت و IP جیاوازە، ئەگەر SYNC_ENDPOINT دانرابێت)
-  useEffect(() => {
-    if (!isOnline || !SYNC_ENDPOINT) return;
+		const syncLoop = async () => {
+			try {
+				await fetch(`${syncUrlBase}/api/sync`, {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({
+						channelId,
+						products,
+						updatedAt: Date.now(),
+					}),
+				});
 
-    let cancelled = false;
+				const res = await fetch(
+					`${syncUrlBase}/api/sync?channelId=${encodeURIComponent(channelId)}`,
+				);
+				if (!res.ok) return;
+				const data = (await res.json()) as {
+					products?: MobileProductItem[];
+					updatedAt?: number;
+				};
+				if (!cancelled && Array.isArray(data.products) && data.updatedAt) {
+					const localLatest = products.reduce(
+						(acc, p) => Math.max(acc, p.updatedAt || 0),
+						0,
+					);
+					if (data.updatedAt > localLatest) {
+						setProducts(data.products);
+						setStatusText("داتای دەرەوە بە نهێنی وەرگیرا");
+					}
+				}
+			} catch {
+				if (!cancelled) {
+					setStatusText("دۆخی ئۆفڵاین / چاوەڕوانی پەیوەندی");
+				}
+			}
+		};
 
-    const pushAndPull = async () => {
-      try {
-        await fetch(`${SYNC_ENDPOINT}/sync`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            channelId,
-            products,
-            updatedAt: Date.now(),
-          }),
-        });
+		syncLoop();
+		const timer = window.setInterval(syncLoop, 5000);
+		return () => {
+			cancelled = true;
+			window.clearInterval(timer);
+		};
+	}, [isOnline, channelId, products, syncUrlBase]);
 
-        const res = await fetch(`${SYNC_ENDPOINT}/sync?channelId=${encodeURIComponent(channelId)}`);
-        if (!res.ok) return;
-        const data = await res.json();
-        if (!cancelled && Array.isArray(data.products) && data.updatedAt) {
-          const localLatest = products.reduce((max, p) => Math.max(max, p.updatedAt || 0), 0);
-          if (data.updatedAt > localLatest) {
-            setProducts(data.products);
-            setSyncStatus("داتای دەرەوە بە نهێنی وەرگیرا");
-          }
-        }
-      } catch {
-        if (!cancelled) {
-          setSyncStatus(isOnline ? "چاوەڕوانی پەیوەندی..." : "دۆخی ئۆفڵاین");
-        }
-      }
-    };
+	const addProduct = (e: React.FormEvent) => {
+		e.preventDefault();
+		const cleanName = name.trim();
+		const numericPrice = Number(price);
+		const numericQty = Math.max(1, Number(qty) || 1);
+		if (!cleanName || Number.isNaN(numericPrice) || numericPrice < 0) return;
 
-    pushAndPull();
-    const interval = window.setInterval(pushAndPull, 5000);
+		const item: MobileProductItem = {
+			id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+			name: cleanName,
+			price: numericPrice,
+			qty: numericQty,
+			updatedAt: Date.now(),
+		};
+		setProducts((prev) => [item, ...prev]);
+		setName("");
+		setPrice("");
+		setQty("1");
+		setStatusText(
+			isOnline
+				? "کاڵا زیاد کرا و خەزن بوو"
+				: "لە دۆخی ئۆفڵاین خەزن کرا و دەمێنێتەوە",
+		);
+	};
 
-    return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-    };
-  }, [isOnline, channelId, products]);
+	const removeProduct = (id: string) => {
+		setProducts((prev) => prev.filter((item) => item.id !== id));
+	};
 
-  const handleAddProduct = (e: React.FormEvent) => {
-    e.preventDefault();
-    const cleanName = name.trim();
-    const numericPrice = Number(price);
-    const numericQty = Math.max(1, Number(qty) || 1);
+	const copyMobileLink = async () => {
+		try {
+			await navigator.clipboard.writeText(mobileLink);
+			setCopied(true);
+			setTimeout(() => setCopied(false), 2000);
+		} catch {
+			setCopied(false);
+		}
+	};
 
-    if (!cleanName || Number.isNaN(numericPrice) || numericPrice < 0) return;
+	const total = useMemo(
+		() => products.reduce((sum, item) => sum + item.price * item.qty, 0),
+		[products],
+	);
 
-    const newItem: ProductItem = {
-      id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-      name: cleanName,
-      price: numericPrice,
-      qty: numericQty,
-      updatedAt: Date.now(),
-    };
+	return (
+		<div
+			dir="rtl"
+			className="min-h-screen bg-slate-950 text-slate-100 p-4 sm:p-6 flex flex-col justify-between"
+		>
+			<div className="max-w-2xl w-full mx-auto space-y-5">
+				<div className="rounded-2xl border border-slate-800 bg-slate-900 p-4 space-y-2">
+					<div className="flex items-center justify-between gap-2">
+						<h1 className="text-lg font-bold text-white">mobile_app</h1>
+						<span
+							className={`px-3 py-1 rounded-full text-xs ${
+								isOnline
+									? "bg-emerald-500/20 text-emerald-300"
+									: "bg-amber-500/20 text-amber-300"
+							}`}
+						>
+							{isOnline ? "ئۆنڵاین" : "ئۆفڵاین"}
+						</span>
+					</div>
+					<p className="text-xs text-slate-400">کەناڵ: {channelId}</p>
+					<p className="text-xs text-slate-200">{statusText}</p>
+				</div>
 
-    setProducts((prev) => [newItem, ...prev]);
-    setName("");
-    setPrice("");
-    setQty("1");
-    setSyncStatus(isOnline ? "خەزن کرا و ئامادەی هاوکاتکردنە" : "لە ئۆفڵاین خەزن کرا و دەمێنێتەوە");
-  };
+				<div className="rounded-2xl border border-slate-800 bg-slate-900 p-4 space-y-2">
+					<label className="block text-xs font-medium text-slate-300">
+						لینکی کردنەوە لە مۆبایل
+					</label>
+					<div className="flex flex-col sm:flex-row gap-2">
+						<input
+							type="text"
+							readOnly
+							value={mobileLink}
+							className="flex-1 rounded-xl bg-slate-950 border border-slate-700 px-3 py-2 text-xs text-slate-200"
+						/>
+						<button
+							type="button"
+							onClick={copyMobileLink}
+							className="rounded-xl bg-indigo-600 hover:bg-indigo-500 px-4 py-2 text-xs font-semibold text-white"
+						>
+							{copied ? "کۆپی کرا ✓" : "کۆپیکردنی لینک"}
+						</button>
+					</div>
+				</div>
 
-  const handleDeleteProduct = (id: string) => {
-    setProducts((prev) => prev.filter((item) => item.id !== id));
-  };
+				<form
+					onSubmit={addProduct}
+					className="rounded-2xl border border-slate-800 bg-slate-900 p-4 grid grid-cols-1 sm:grid-cols-4 gap-2"
+				>
+					<input
+						type="text"
+						placeholder="ناوی کاڵا"
+						value={name}
+						onChange={(e) => setName(e.target.value)}
+						className="sm:col-span-2 rounded-xl bg-slate-950 border border-slate-700 px-3 py-2 text-sm text-white"
+					/>
+					<input
+						type="number"
+						placeholder="نرخ"
+						value={price}
+						onChange={(e) => setPrice(e.target.value)}
+						className="rounded-xl bg-slate-950 border border-slate-700 px-3 py-2 text-sm text-white"
+					/>
+					<div className="flex gap-2">
+						<input
+							type="number"
+							min="1"
+							value={qty}
+							onChange={(e) => setQty(e.target.value)}
+							className="w-16 rounded-xl bg-slate-950 border border-slate-700 px-2 py-2 text-sm text-white"
+						/>
+						<button
+							type="submit"
+							className="flex-1 rounded-xl bg-emerald-600 hover:bg-emerald-500 px-3 py-2 text-sm font-semibold text-white"
+						>
+							زیادکردن
+						</button>
+					</div>
+				</form>
 
-  const handleCopyLink = async () => {
-    try {
-      await navigator.clipboard.writeText(mobileLink);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      setCopied(false);
-    }
-  };
+				<div className="rounded-2xl border border-slate-800 bg-slate-900 p-4 space-y-3">
+					<div className="flex items-center justify-between">
+						<h2 className="text-sm font-semibold text-white">
+							کاڵاکان ({products.length})
+						</h2>
+						<span className="text-sm font-bold text-emerald-400">
+							کۆ: {total.toLocaleString()}
+						</span>
+					</div>
+					{products.length === 0 ? (
+						<p className="text-xs text-slate-400">هیچ کاڵایەک نییە.</p>
+					) : (
+						<ul className="divide-y divide-slate-800">
+							{products.map((p) => (
+								<li
+									key={p.id}
+									className="py-2.5 flex items-center justify-between gap-2"
+								>
+									<div>
+										<p className="text-sm font-medium text-white">{p.name}</p>
+										<p className="text-xs text-slate-400">
+											{p.qty} × {p.price.toLocaleString()}
+										</p>
+									</div>
+									<button
+										type="button"
+										onClick={() => removeProduct(p.id)}
+										className="text-xs text-rose-400 hover:text-rose-300"
+									>
+										سڕینەوە
+									</button>
+								</li>
+							))}
+						</ul>
+					)}
+				</div>
+			</div>
 
-  const totalAmount = useMemo(
-    () => products.reduce((sum, item) => sum + item.price * item.qty, 0),
-    [products]
-  );
-
-  return (
-    <div dir="rtl" className="min-h-screen bg-slate-950 text-slate-100 p-4 md:p-8 flex flex-col justify-between">
-      <div className="max-w-3xl w-full mx-auto space-y-6">
-        {/* سەردێڕ و دۆخ */}
-        <div className="rounded-2xl border border-slate-800 bg-slate-900/80 p-5 space-y-3">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h1 className="text-xl font-bold text-white">mobile_app</h1>
-              <p className="text-xs text-slate-400">کۆدی کەناڵ: {channelId}</p>
-            </div>
-            <span
-              className={`px-3 py-1 rounded-full text-xs font-medium ${
-                isOnline
-                  ? "bg-emerald-500/15 text-emerald-300 border border-emerald-500/30"
-                  : "bg-amber-500/15 text-amber-300 border border-amber-500/30"
-              }`}
-            >
-              {isOnline ? "ئۆنڵاین" : "ئۆفڵاین (پارێزراو)"}
-            </span>
-          </div>
-
-          <p className="text-xs text-slate-300">{syncStatus}</p>
-          {autoAccepted && (
-            <div className="text-xs text-emerald-300 bg-emerald-950/50 border border-emerald-800/50 rounded-xl px-3 py-2">
-              لینکەکە لە مۆبایل خۆکارانە قبوڵ کرا و داتاکانی پێشوو پارێزراون.
-            </div>
-          )}
-        </div>
-
-        {/* لینکی کردنەوە لە مۆبایل */}
-        <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5 space-y-3">
-          <label className="block text-sm font-medium text-slate-200">
-            لینکی کردنەوە لە مۆبایل (`mobile_app`)
-          </label>
-          <div className="flex flex-col sm:flex-row gap-2">
-            <input
-              type="text"
-              readOnly
-              value={mobileLink}
-              className="flex-1 rounded-xl bg-slate-950 border border-slate-700 px-3 py-2 text-xs text-slate-200"
-            />
-            <button
-              type="button"
-              onClick={handleCopyLink}
-              className="rounded-xl bg-indigo-600 hover:bg-indigo-500 px-4 py-2 text-xs font-semibold text-white transition"
-            >
-              {copied ? "کۆپی کرا ✓" : "کۆپیکردنی لینک"}
-            </button>
-          </div>
-        </div>
-
-        {/* فۆرمی داخڵکردنی کاڵا */}
-        <form
-          onSubmit={handleAddProduct}
-          className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5 grid grid-cols-1 sm:grid-cols-4 gap-3"
-        >
-          <input
-            type="text"
-            placeholder="ناوی کاڵا"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            className="sm:col-span-2 rounded-xl bg-slate-950 border border-slate-700 px-3 py-2 text-sm text-white"
-          />
-          <input
-            type="number"
-            placeholder="نرخ"
-            value={price}
-            onChange={(e) => setPrice(e.target.value)}
-            className="rounded-xl bg-slate-950 border border-slate-700 px-3 py-2 text-sm text-white"
-          />
-          <div className="flex gap-2">
-            <input
-              type="number"
-              min="1"
-              placeholder="عدد"
-              value={qty}
-              onChange={(e) => setQty(e.target.value)}
-              className="w-20 rounded-xl bg-slate-950 border border-slate-700 px-3 py-2 text-sm text-white"
-            />
-            <button
-              type="submit"
-              className="flex-1 rounded-xl bg-emerald-600 hover:bg-emerald-500 px-3 py-2 text-sm font-semibold text-white transition"
-            >
-              زیادکردن
-            </button>
-          </div>
-        </form>
-
-        {/* لیستی کاڵا خەزنکراوەکان */}
-        <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5 space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-base font-semibold text-white">
-              کاڵا داخڵکراوەکان ({products.length})
-            </h2>
-            <span className="text-sm font-bold text-emerald-400">
-              کۆی گشتی: {totalAmount.toLocaleString()}
-            </span>
-          </div>
-
-          {products.length === 0 ? (
-            <p className="text-sm text-slate-400">هیچ کاڵایەک داخڵ نەکراوە.</p>
-          ) : (
-            <ul className="divide-y divide-slate-800">
-              {products.map((item) => (
-                <li key={item.id} className="py-3 flex items-center justify-between gap-3">
-                  <div>
-                    <p className="text-sm font-medium text-white">{item.name}</p>
-                    <p className="text-xs text-slate-400">
-                      عدد: {item.qty} × نرخ: {item.price.toLocaleString()}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => handleDeleteProduct(item.id)}
-                    className="text-xs text-rose-400 hover:text-rose-300 px-2 py-1"
-                  >
-                    سڕینەوە
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      </div>
-
-      {/* مافی خاوەندارێتی */}
-      <footer className="max-w-3xl w-full mx-auto pt-8 pb-2 text-center text-xs text-slate-400">
-        ©hama rekan
-      </footer>
-    </div>
-  );
+			<footer className="max-w-2xl w-full mx-auto pt-6 pb-2 text-center text-xs text-slate-400">
+				©hama rekan
+			</footer>
+		</div>
+	);
 }
