@@ -20,6 +20,8 @@
  *   POST /api/events/batch     — Record multiple events
  *   POST /api/events/from-headers — Record an event from cf-agent-* headers
  *   DELETE /api/events         — Clear all events (development helper)
+ *   GET  /api/sync             — Read synced mobile_app products for a channel
+ *   POST /api/sync             — Save synced mobile_app products for a channel
  *
  *   GET  /                     — React SPA (Workers Static Assets)
  */
@@ -61,6 +63,69 @@ async function maybeSeed(env: Env): Promise<void> {
 	await seedDemoDataIfNeeded(env.EVENT_STORE, env);
 }
 
+// ---------------------------------------------------------------------------
+// Mobile App (/mobile_app) remote channel sync via KV
+// ---------------------------------------------------------------------------
+
+interface SyncPayload {
+	channelId?: string;
+	products?: unknown[];
+	updatedAt?: number;
+}
+
+function setSyncCorsHeaders(c: { header: (name: string, value: string) => void }): void {
+	c.header("Access-Control-Allow-Origin", "*");
+	c.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+	c.header("Access-Control-Allow-Headers", "Content-Type");
+}
+
+app.options("/api/sync", (c) => {
+	setSyncCorsHeaders(c);
+	return c.body(null, 204);
+});
+
+app.get("/api/sync", async (c) => {
+	setSyncCorsHeaders(c);
+	const channelId = (c.req.query("channelId") || "").trim();
+	if (!channelId) {
+		return c.json({ products: [], updatedAt: 0 });
+	}
+	const kvKey = `mobile_sync:${channelId}`;
+	const raw = await c.env.EVENT_STORE.get(kvKey);
+	if (!raw) {
+		return c.json({ products: [], updatedAt: 0 });
+	}
+	try {
+		const parsed = JSON.parse(raw) as { products?: unknown[]; updatedAt?: number };
+		return c.json({
+			products: Array.isArray(parsed.products) ? parsed.products : [],
+			updatedAt: typeof parsed.updatedAt === "number" ? parsed.updatedAt : 0,
+		});
+	} catch {
+		return c.json({ products: [], updatedAt: 0 });
+	}
+});
+
+app.post("/api/sync", async (c) => {
+	setSyncCorsHeaders(c);
+	try {
+		const body = await c.req.json<SyncPayload>();
+		const channelId = (body.channelId || "").trim();
+		if (!channelId) {
+			return c.json({ error: "channelId is required" }, 400);
+		}
+		const record = {
+			products: Array.isArray(body.products) ? body.products : [],
+			updatedAt: typeof body.updatedAt === "number" ? body.updatedAt : Date.now(),
+		};
+		const kvKey = `mobile_sync:${channelId}`;
+		await c.env.EVENT_STORE.put(kvKey, JSON.stringify(record));
+		return c.json({ ok: true, updatedAt: record.updatedAt });
+	} catch {
+		return c.json({ error: "Invalid JSON body" }, 400);
+	}
+});
+
 // Seed demo data on demand from routes that care (dashboard reads, event
 // ingestion). `/api` and static-asset fallthroughs don't pay for the seed.
 
@@ -88,6 +153,8 @@ app.get("/api", (c) => {
 			"POST /api/events/from-headers":
 				"Record an event from cf-agent-* headers",
 			"DELETE /api/events": "Clear all events (development helper)",
+			"GET /api/sync": "Fetch mobile_app synced products",
+			"POST /api/sync": "Store mobile_app synced products",
 		},
 		buildsOn: [
 			"Radar AI Insights — global AI bot traffic patterns",
