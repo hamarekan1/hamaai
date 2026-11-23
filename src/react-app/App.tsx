@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import "./App.css";
 
 // ---------------------------------------------------------------------------
@@ -123,11 +123,363 @@ interface Summary {
 	insights: Insight[];
 }
 
+interface MobileProductItem {
+	id: string;
+	name: string;
+	price: number;
+	qty: number;
+	updatedAt: number;
+}
+
 // ---------------------------------------------------------------------------
 // App
 // ---------------------------------------------------------------------------
 
 function App() {
+	const [pathname, setPathname] = useState<string>(() => window.location.pathname);
+
+	useEffect(() => {
+		const onPopState = () => setPathname(window.location.pathname);
+		window.addEventListener("popstate", onPopState);
+		return () => window.removeEventListener("popstate", onPopState);
+	}, []);
+
+	const isMobileAppRoute =
+		pathname === "/mobile_app" || pathname.endsWith("/mobile_app");
+
+	if (isMobileAppRoute) {
+		return <MobileAppView />;
+	}
+
+	return <AnalyticsDashboardApp />;
+}
+
+// ---------------------------------------------------------------------------
+// Mobile App (/mobile_app)
+// ---------------------------------------------------------------------------
+
+const MOBILE_STORAGE_KEY = "hamaai_mobile_app_products_v1";
+const MOBILE_CHANNEL_KEY = "hamaai_mobile_app_channel_v1";
+const MOBILE_SYNC_ENDPOINT = ""; // لێرە لینکی Worker دابنێ ئەگەر ویستت لەسەر IP جیاواز داتاکان بگۆڕدرێنەوە
+
+function resolveChannelId(): string {
+	const params = new URLSearchParams(window.location.search);
+	const fromUrl = params.get("channel");
+	if (fromUrl && fromUrl.trim().length > 0) {
+		try {
+			localStorage.setItem(MOBILE_CHANNEL_KEY, fromUrl.trim());
+		} catch {
+			// ignore storage error
+		}
+		return fromUrl.trim();
+	}
+	try {
+		const saved = localStorage.getItem(MOBILE_CHANNEL_KEY);
+		if (saved) return saved;
+		const generated = `ch_${Math.random().toString(36).slice(2, 10)}_${Date.now().toString(36)}`;
+		localStorage.setItem(MOBILE_CHANNEL_KEY, generated);
+		return generated;
+	} catch {
+		return "ch_default";
+	}
+}
+
+function loadMobileProducts(): MobileProductItem[] {
+	try {
+		const raw = localStorage.getItem(MOBILE_STORAGE_KEY);
+		if (!raw) return [];
+		const parsed = JSON.parse(raw);
+		return Array.isArray(parsed) ? parsed : [];
+	} catch {
+		return [];
+	}
+}
+
+function MobileAppView() {
+	const [products, setProducts] = useState<MobileProductItem[]>(() =>
+		loadMobileProducts(),
+	);
+	const [name, setName] = useState("");
+	const [price, setPrice] = useState("");
+	const [qty, setQty] = useState("1");
+	const [isOnline, setIsOnline] = useState<boolean>(() => navigator.onLine);
+	const [statusText, setStatusText] = useState<string>(
+		"خۆکارانە قبوڵ کرا و ئامادەیە",
+	);
+	const [copied, setCopied] = useState(false);
+
+	const channelId = useMemo(() => resolveChannelId(), []);
+
+	const shareLink = useMemo(() => {
+		const base = `${window.location.origin}/mobile_app`;
+		return `${base}?channel=${encodeURIComponent(channelId)}&auto=1`;
+	}, [channelId]);
+
+	useEffect(() => {
+		try {
+			localStorage.setItem(MOBILE_STORAGE_KEY, JSON.stringify(products));
+		} catch {
+			setStatusText("کێشە لە خەزنکردنی ناوخۆیی");
+		}
+	}, [products]);
+
+	useEffect(() => {
+		const handleOnline = () => {
+			setIsOnline(true);
+			setStatusText("ئۆنڵاین بوو — هاوکاتکردنی نهێنی چالاکە");
+		};
+		const handleOffline = () => {
+			setIsOnline(false);
+			setStatusText("ئینتەرنێت نییە (ئۆفڵاین) — لە هەمان شوێن ماوە");
+		};
+		window.addEventListener("online", handleOnline);
+		window.addEventListener("offline", handleOffline);
+		return () => {
+			window.removeEventListener("online", handleOnline);
+			window.removeEventListener("offline", handleOffline);
+		};
+	}, []);
+
+	useEffect(() => {
+		const onStorage = (e: StorageEvent) => {
+			if (e.key === MOBILE_STORAGE_KEY && e.newValue) {
+				try {
+					const incoming = JSON.parse(e.newValue) as MobileProductItem[];
+					if (Array.isArray(incoming)) {
+						setProducts(incoming);
+						setStatusText("داتاکان بە نهێنی هاوکات کران");
+					}
+				} catch {
+					// ignore invalid JSON
+				}
+			}
+		};
+		window.addEventListener("storage", onStorage);
+		return () => window.removeEventListener("storage", onStorage);
+	}, []);
+
+	useEffect(() => {
+		if (!isOnline || !MOBILE_SYNC_ENDPOINT) return;
+		let cancelled = false;
+
+		const syncLoop = async () => {
+			try {
+				await fetch(`${MOBILE_SYNC_ENDPOINT}/sync`, {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({
+						channelId,
+						products,
+						updatedAt: Date.now(),
+					}),
+				});
+
+				const res = await fetch(
+					`${MOBILE_SYNC_ENDPOINT}/sync?channelId=${encodeURIComponent(channelId)}`,
+				);
+				if (!res.ok) return;
+				const data = (await res.json()) as {
+					products?: MobileProductItem[];
+					updatedAt?: number;
+				};
+				if (!cancelled && Array.isArray(data.products) && data.updatedAt) {
+					const localLatest = products.reduce(
+						(acc, p) => Math.max(acc, p.updatedAt || 0),
+						0,
+					);
+					if (data.updatedAt > localLatest) {
+						setProducts(data.products);
+						setStatusText("داتای دەرەوە بە نهێنی وەرگیرا");
+					}
+				}
+			} catch {
+				if (!cancelled) {
+					setStatusText("دۆخی ئۆفڵاین / چاوەڕوانی پەیوەندی");
+				}
+			}
+		};
+
+		syncLoop();
+		const timer = window.setInterval(syncLoop, 5000);
+		return () => {
+			cancelled = true;
+			window.clearInterval(timer);
+		};
+	}, [isOnline, channelId, products]);
+
+	const addProduct = (e: React.FormEvent) => {
+		e.preventDefault();
+		const cleanName = name.trim();
+		const numericPrice = Number(price);
+		const numericQty = Math.max(1, Number(qty) || 1);
+		if (!cleanName || Number.isNaN(numericPrice) || numericPrice < 0) return;
+
+		const item: MobileProductItem = {
+			id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+			name: cleanName,
+			price: numericPrice,
+			qty: numericQty,
+			updatedAt: Date.now(),
+		};
+		setProducts((prev) => [item, ...prev]);
+		setName("");
+		setPrice("");
+		setQty("1");
+		setStatusText(
+			isOnline
+				? "کاڵا زیاد کرا و خەزن بوو"
+				: "لە دۆخی ئۆفڵاین خەزن کرا و دەمێنێتەوە",
+		);
+	};
+
+	const removeProduct = (id: string) => {
+		setProducts((prev) => prev.filter((item) => item.id !== id));
+	};
+
+	const copyShareLink = async () => {
+		try {
+			await navigator.clipboard.writeText(shareLink);
+			setCopied(true);
+			setTimeout(() => setCopied(false), 2000);
+		} catch {
+			setCopied(false);
+		}
+	};
+
+	const total = useMemo(
+		() => products.reduce((sum, item) => sum + item.price * item.qty, 0),
+		[products],
+	);
+
+	return (
+		<div
+			dir="rtl"
+			className="min-h-screen bg-slate-950 text-slate-100 p-4 sm:p-6 flex flex-col justify-between"
+		>
+			<div className="max-w-2xl w-full mx-auto space-y-5">
+				<div className="rounded-2xl border border-slate-800 bg-slate-900 p-4 space-y-2">
+					<div className="flex items-center justify-between gap-2">
+						<h1 className="text-lg font-bold text-white">mobile_app</h1>
+						<span
+							className={`px-3 py-1 rounded-full text-xs ${
+								isOnline
+									? "bg-emerald-500/20 text-emerald-300"
+									: "bg-amber-500/20 text-amber-300"
+							}`}
+						>
+							{isOnline ? "ئۆنڵاین" : "ئۆفڵاین"}
+						</span>
+					</div>
+					<p className="text-xs text-slate-400">کەناڵ: {channelId}</p>
+					<p className="text-xs text-slate-200">{statusText}</p>
+				</div>
+
+				<div className="rounded-2xl border border-slate-800 bg-slate-900 p-4 space-y-2">
+					<label className="block text-xs font-medium text-slate-300">
+						لینکی کردنەوە لە مۆبایل
+					</label>
+					<div className="flex flex-col sm:flex-row gap-2">
+						<input
+							type="text"
+							readOnly
+							value={shareLink}
+							className="flex-1 rounded-xl bg-slate-950 border border-slate-700 px-3 py-2 text-xs text-slate-200"
+						/>
+						<button
+							type="button"
+							onClick={copyShareLink}
+							className="rounded-xl bg-indigo-600 hover:bg-indigo-500 px-4 py-2 text-xs font-semibold text-white"
+						>
+							{copied ? "کۆپی کرا ✓" : "کۆپیکردنی لینک"}
+						</button>
+					</div>
+				</div>
+
+				<form
+					onSubmit={addProduct}
+					className="rounded-2xl border border-slate-800 bg-slate-900 p-4 grid grid-cols-1 sm:grid-cols-4 gap-2"
+				>
+					<input
+						type="text"
+						placeholder="ناوی کاڵا"
+						value={name}
+						onChange={(e) => setName(e.target.value)}
+						className="sm:col-span-2 rounded-xl bg-slate-950 border border-slate-700 px-3 py-2 text-sm text-white"
+					/>
+					<input
+						type="number"
+						placeholder="نرخ"
+						value={price}
+						onChange={(e) => setPrice(e.target.value)}
+						className="rounded-xl bg-slate-950 border border-slate-700 px-3 py-2 text-sm text-white"
+					/>
+					<div className="flex gap-2">
+						<input
+							type="number"
+							min="1"
+							value={qty}
+							onChange={(e) => setQty(e.target.value)}
+							className="w-16 rounded-xl bg-slate-950 border border-slate-700 px-2 py-2 text-sm text-white"
+						/>
+						<button
+							type="submit"
+							className="flex-1 rounded-xl bg-emerald-600 hover:bg-emerald-500 px-3 py-2 text-sm font-semibold text-white"
+						>
+							زیادکردن
+						</button>
+					</div>
+				</form>
+
+				<div className="rounded-2xl border border-slate-800 bg-slate-900 p-4 space-y-3">
+					<div className="flex items-center justify-between">
+						<h2 className="text-sm font-semibold text-white">
+							کاڵاکان ({products.length})
+						</h2>
+						<span className="text-sm font-bold text-emerald-400">
+							کۆ: {total.toLocaleString()}
+						</span>
+					</div>
+					{products.length === 0 ? (
+						<p className="text-xs text-slate-400">هیچ کاڵایەک نییە.</p>
+					) : (
+						<ul className="divide-y divide-slate-800">
+							{products.map((p) => (
+								<li
+									key={p.id}
+									className="py-2.5 flex items-center justify-between gap-2"
+								>
+									<div>
+										<p className="text-sm font-medium text-white">{p.name}</p>
+										<p className="text-xs text-slate-400">
+											{p.qty} × {p.price.toLocaleString()}
+										</p>
+									</div>
+									<button
+										type="button"
+										onClick={() => removeProduct(p.id)}
+										className="text-xs text-rose-400 hover:text-rose-300"
+									>
+										سڕینەوە
+									</button>
+								</li>
+							))}
+						</ul>
+					)}
+				</div>
+			</div>
+
+			<footer className="max-w-2xl w-full mx-auto pt-6 pb-2 text-center text-xs text-slate-400">
+				©hama rekan
+			</footer>
+		</div>
+	);
+}
+
+// ---------------------------------------------------------------------------
+// Existing Analytics Dashboard
+// ---------------------------------------------------------------------------
+
+function AnalyticsDashboardApp() {
 	const [summary, setSummary] = useState<Summary | null>(null);
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState<string | null>(null);
@@ -563,9 +915,6 @@ function BeforeAfter({
 	const topAgent = summary.agentBreakdown.find((a) => a.estimatedRevenue > 0);
 	const topProduct = summary.topProducts[0];
 
-	// "Before" column = the signals a merchant would already see in Zone
-	// Analytics / raw HTTP logs, generated from raw counts so this column
-	// stays populated even when there's very little activity.
 	const beforeLines: string[] = [
 		`${summary.totalEvents} requests flagged as likely-bot`,
 		`${summary.funnel.discoveryReads} hits on /llms.txt`,
@@ -581,7 +930,6 @@ function BeforeAfter({
 		);
 	}
 
-	// "After" column = what the commerce-aware layer infers from the same events.
 	const afterLines: string[] = [
 		`${summary.uniqueAgents} distinct agents, ${purchasingAgents} purchased ${formatCurrency(summary.revenue.estimatedTotal)}`,
 	];
@@ -661,15 +1009,15 @@ function stepKind(
 function stepGlyph(kind: string): string {
 	switch (kind) {
 		case "discover":
-			return "\u2315"; // ⌕ looking glass
+			return "\u2315";
 		case "view":
-			return "\u25CE"; // ◎ bullseye
+			return "\u25CE";
 		case "buy":
-			return "\u2713"; // ✓ check
+			return "\u2713";
 		case "blocked":
-			return "\u2715"; // ✕ cross
+			return "\u2715";
 		default:
-			return "\u2022"; // • bullet
+			return "\u2022";
 	}
 }
 
