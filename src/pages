@@ -10,7 +10,6 @@ interface MobileProductItem {
 
 const MOBILE_STORAGE_KEY = "hamaai_mobile_app_products_v1";
 const MOBILE_CHANNEL_KEY = "hamaai_mobile_app_channel_v1";
-// ئەگەر Worker لەسەر دۆمەینێکی ترە لینکی بنووسە، ئەگەر لەسەر هەمان وێبسایتە بە بەتاڵی بهێڵەرەوە
 const MOBILE_SYNC_ENDPOINT = "";
 
 function resolveChannelId(): string {
